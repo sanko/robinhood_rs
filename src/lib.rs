@@ -35,6 +35,7 @@ extern crate reqwest;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
+
 extern crate time;
 
 use std::rc::Rc;
@@ -44,6 +45,8 @@ use reqwest::{Client as HTTPClient, Response};
 use reqwest::header::{Authorization, Bearer, Headers, UserAgent};
 
 use std::collections::HashMap;
+
+use std::io::Read;
 
 #[macro_use]
 pub mod macros;
@@ -132,34 +135,118 @@ impl Client {
         ClientBuilder {
             username: None,
             password: None,
-            agent: "Robinhood/2622 (Android 6.1;)".to_string(),
+            agent: "Robinhood/2672 (Android 6.1;)".to_string(),
             client_string: None,                 // OAuth2
             scope: Some("internal".to_string()), // OAuth2
             mfa_callback: cell,
         }
     }
 
-    pub fn authorized(&self) -> bool {
-        self.authorized
+    pub fn _get(&self, url: &str) -> String {
+        let mut body = String::new();
+        let mut res = self._get_res(url);
+        println!("{:?}", res);
+        res.read_to_string(&mut body).unwrap();
+        body
     }
 
-    /// Creates a new client builder
+    pub fn _post(&self, url: &str, params: Option<HashMap<&str, &str>>) -> String {
+        let mut body = String::new();
+        let mut res = self._post_res(url, params);
+        println!("{:?}", res);
+        res.read_to_string(&mut body).unwrap();
+        body
+    }
+
+    pub fn _post_res(&self, url: &str, params: Option<HashMap<&str, &str>>) -> Response {
+        let mut req = self.client.post(url);
+
+        if params.is_some() {
+            req.form(&params.to_owned());
+        }
+
+        req.send().unwrap()
+    }
+
+    pub fn _get_res(&self, url: &str) -> Response {
+        let mut req = self.client.get(url);
+        req.send().unwrap()
+    }
+
+    /// Checks whether or not the client is authorized with an account.
     ///
     /// # Arguments
     ///
-    /// * `name` - A string slice that holds the name of the person
+    /// None
     ///
     /// # Example
     ///
     /// ```
-    /// // You can have rust code between fences inside the comments
-    /// // If you pass --test to Rustdoc, it will even test it for you!
+    /// // Some methods require an account to access
     /// use robinhood::Client;
-    /// let person = Client::new().build();
+    /// let rh = Client::new().build().unwrap();
+    /// if rh.authorized() { // False because we didn't even attempt to log in
+    ///    let orders = rh.orders();
+    /// }
     /// ```
+    pub fn authorized(&self) -> bool {
+        self.authorized
+    }
 
+    /// Unless you're using OAuth2, every client that logs in with your username/password is
+    /// given the same token. For security, you can force it to expire with a call to log out.
+    ///
+    /// Clients logged in with OAuth tokens will not be asked to log back in.
+    ///
+    /// # Arguments
+    ///
+    /// None
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use robinhood::Client;
+    /// let rh = Client::new().login("username", "password").build().unwrap();
+    ///  // Do something
+    /// rh.logout();
+    /// ```
+    pub fn logout(&self) -> bool {
+        if self.authorized() {
+            let mut body = String::new();
+            let mut res = self.client
+                .post("https://api.robinhood.com/api-token-logout/")
+                .send()
+                .unwrap();
+            res.read_to_string(&mut body).unwrap();
+            body.is_empty()
+        }
+        else {
+            false
+        }
+    }
+
+    /// Creates a recursive iterator for gathering the list of instruments
+    ///
+    /// # Arguments
+    ///
+    /// None
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use robinhood::Client;
+    /// let rh = Client::new().build().unwrap();
+    /// let instruments = rh.instruments();
+    /// for instrument in instruments.take(3) {
+    ///     println!("Instrument: {:#?}", instrument);
+    /// }
+    /// ```
     pub fn instruments(&self) -> Instruments {
         Instruments::new_with_client(self.client.to_owned())
+    }
+
+    pub fn instrument_by_symbol(&self, symbol: &str) -> Result<Instrument> {
+        Instruments::search_by_symbol(symbol)
     }
 
     pub fn accounts(&self) -> Accounts {
@@ -174,8 +261,58 @@ impl Client {
         //}
     }
 
-    pub fn get(&self, url: &str) -> Response {
-        self.client.to_owned().get(url).send().unwrap()
+    pub fn sell(&self, quantity: u64, instrument: Instrument) -> OrderBuilder {
+        let account = self.accounts().nth(0).unwrap().unwrap();
+        self.to_owned()
+            .sell_with_account(quantity, instrument, account)
+    }
+
+    pub fn sell_with_account(
+        &self,
+        quantity: u64,
+        instrument: Instrument,
+        account: Account,
+    ) -> OrderBuilder
+    {
+        OrderBuilder::new(
+            self.client.to_owned(),
+            "sell",
+            quantity,
+            instrument,
+            account,
+        )
+        // pub fn new( side: &str, quantity: u64, instrument: Instrument,
+        // account: Account ) -> OrderBuilder {
+    }
+
+    pub fn buy(&self, quantity: u64, instrument: Instrument) -> OrderBuilder {
+        let account = self.accounts().nth(0).unwrap().unwrap();
+        self.buy_with_account(quantity, instrument, account)
+    }
+
+    pub fn buy_with_account(
+        &self,
+        quantity: u64,
+        instrument: Instrument,
+        account: Account,
+    ) -> OrderBuilder
+    {
+        let order_builder: OrderBuilder =
+            OrderBuilder::new(self.client.to_owned(), "buy", quantity, instrument, account);
+        order_builder
+        // pub fn new( side: &str, quantity: u64, instrument: Instrument,
+        // account: Account ) -> OrderBuilder {
+    }
+
+    pub fn cancel(&self, order: Order) -> bool {
+        if order.can_cancel().is_none() {
+            return false;
+        }
+        let res = self.client
+            .post(order.can_cancel().unwrap().as_str())
+            .send()
+            .unwrap();
+        res.status().is_success()
     }
 }
 
@@ -235,14 +372,11 @@ impl ClientBuilder {
         params.insert("password", self.password.as_ref().unwrap());
         params.insert("scope", self.scope.as_ref().unwrap());
         params.insert("client_id", self.client_string.as_ref().unwrap());
-
         if mfa_code.is_some() {
             params.insert("mfa_code", mfa_code.as_ref().unwrap());
         }
-
         // ("backup_code", backup_code.into())
         let client = HTTPClient::new();
-
         let mut res = client
             .post("https://api.robinhood.com/oauth2/token/")
             .header(UserAgent::new(self.agent.to_owned()))
@@ -251,7 +385,6 @@ impl ClientBuilder {
             .unwrap()
             .json::<OAuthToken>()
             .unwrap();
-
         if mfa_code.is_none() && res.mfa_required.is_some() && res.mfa_required.unwrap() {
             let mfa = &self._get_mfa_code(res.mfa_type.unwrap());
             return self._oauth_login(Some(mfa.to_string()));
@@ -259,7 +392,6 @@ impl ClientBuilder {
         else {
             res.birth = Some(time::get_time().sec);
         }
-
         Some(res)
     }
 
@@ -299,10 +431,9 @@ impl ClientBuilder {
 
         if self.username.is_some() && self.username.is_some() {
             if self.client_string.is_some() {
-                // OAuth2
-
                 // let mfa_callback = self.mfa_callback.as_ref();
                 let token = self._oauth_login(None);
+                // println!("OAuth2: {:?}", token);
                 if token.is_some() {
                     headers.set(Authorization(Bearer {
                         token: token.unwrap().access_token.to_owned().unwrap(),
@@ -312,6 +443,7 @@ impl ClientBuilder {
             else {
                 // Old skool
                 let token = self._classic_login(None);
+                // println!("Classic: {:?}", token);
                 headers.set(Authorization(
                     String::from("Token ") + token.unwrap().token.to_owned().unwrap().as_ref(),
                 ));
@@ -477,7 +609,8 @@ iter_builder!(
     unsettled_debit: String = None,
     account_number: String = None,
     uncleared_deposits: String = None,
-    unsettled_funds: String = None
+    unsettled_funds: String = None,
+    nummus_enabled: Option<bool> = None
 });
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -495,7 +628,8 @@ iter_builder!(
     ref_id: Option<String> = None,
 	time_in_force: String = None,
 	fees: String = None,
-	cancel: serde_json::Value = None,
+    #[serde(rename = "cancel")]
+	can_cancel: Option<String> = None,
 	id: String = None,
 	cumulative_quantity: String = None,
 	stop_price: Option<String> = None,
@@ -525,5 +659,272 @@ mod tests {
     #[test]
     fn it_works() {
         assert_eq!(2 + 2, 4);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OrderBuilder {
+    client: HTTPClient,
+    time_in_force: String,
+    stop_price: Option<f64>,
+    instrument: Instrument,
+    override_dtbp_checks: bool,
+    _type: String,
+    price: Option<f64>,
+    extended_hours: bool,
+    account: Account,
+    side: String,
+    override_day_trade_checks: bool,
+    quantity: u64,
+}
+
+impl OrderBuilder {
+    pub fn new(
+        ref mut client: HTTPClient,
+        side: &str,
+        quantity: u64,
+        instrument: Instrument,
+        account: Account,
+    ) -> OrderBuilder
+    {
+        OrderBuilder {
+            client: client.to_owned(),
+
+            _type: "market".to_owned(),
+            side: side.to_owned(),
+            time_in_force: "opg".to_owned(),
+
+            //  `gfd`, `gtc`, or `opg`
+            price: None,
+            stop_price: None,
+            quantity: quantity,
+
+            instrument: instrument,
+            account:    account,
+
+            extended_hours: false,
+            override_dtbp_checks: false,
+            override_day_trade_checks: false,
+        }
+    }
+
+    pub fn send(&self) -> Order {
+        let mut params = HashMap::new();
+        params.insert("account", self.account.url());
+        params.insert("instrument", self.instrument.url());
+        params.insert("symbol", self.instrument.symbol());
+        params.insert("type", self._type.to_owned());
+        params.insert("time_in_force", self.time_in_force.to_owned());
+        params.insert("trigger", "immediate".to_owned());
+        params.insert("quantity", self.quantity.to_string());
+        params.insert("side", self.side.to_owned());
+
+        if self.stop_price.is_some() {
+            params.insert("stop_price", self.stop_price.unwrap().to_string());
+            params.insert("trigger", "stop".to_owned());
+        }
+        if self._type == "market" && self.price.is_none() {
+            // self.price =
+            // TODO: Get price from quote endpoint
+        }
+        if self.price.is_some() {
+            params.insert("price", self.price.unwrap().to_string());
+        }
+
+        params.insert("override_day_trade_checks", "true".to_string());
+
+        if self._type.eq("limit") && self.stop_price.is_none() {
+            // params.insert("extended_hours", "true".to_string());
+        }
+
+        println!("{:#?}", params);
+
+        let mut req = self.client.post("https://api.robinhood.com/orders/");
+        req.form(&params.to_owned());
+        let res = req.send().unwrap().json::<OrderData>().unwrap();
+        Order { data: res }
+    }
+
+    pub fn gfd(&mut self) -> &mut OrderBuilder {
+        self.time_in_force = "gfd".to_string();
+        self
+    }
+    pub fn gtc(&mut self) -> &mut OrderBuilder {
+        self.time_in_force = "gtc".to_string();
+        self
+    }
+    pub fn opg(&mut self) -> &mut OrderBuilder {
+        self.time_in_force = "opg".to_string();
+        self
+    }
+
+    pub fn stop(&mut self, price: f64) -> &mut OrderBuilder {
+        self.stop_price = Some(price);
+        self
+    }
+
+    pub fn limit(&mut self, price: f64) -> &mut OrderBuilder {
+        self.price = Some(price);
+        self._type = "limit".to_owned();
+        self
+    }
+
+    pub fn _price(&mut self, price: f64) -> &mut OrderBuilder {
+        // Set collar price on market order
+        self.price = Some(price);
+        self
+    }
+    // pub fn oauth_client(&mut self, client_string: &str) -> &mut OrderBuilder {
+    // self.client_string = Some(client_string.to_owned());
+    // self
+    // }
+    //
+    // pub fn oauth_scope(&mut self, scope: &str) -> &mut OrderBuilder {
+    // self.scope = Some(scope.to_owned());
+    // self
+    // }
+    //
+    // pub fn mfa(&mut self, callback: Box<Fn() -> String + 'static>) -> &mut
+    // OrderBuilder {
+    // pub fn mfa<F: FnMut(String) -> String + 'static>(&mut self, callback: F) ->
+    // &mut OrderBuilder { let cell = Rc::new(RefCell::new(callback));
+    // self.mfa_callback = cell;
+    // self
+    // }
+    //
+    // pub fn login(&mut self, username: &str, password: &str) -> &mut OrderBuilder
+    // { self.username = Some(username.to_owned());
+    // self.password = Some(password.to_owned());
+    // self
+    // }
+    //
+    // fn _get_mfa_code(&self, mfa_type: String) -> String {
+    // let mut closure = self.mfa_callback.as_ref().borrow_mut();
+    // Unfortunately, Rust's auto-dereference of pointers is not clever enough
+    // here. We thus have to explicitly dereference the smart
+    // pointer and obtain a mutable borrow of the target.
+    // let mfa_code: String = (&mut *closure)(mfa_type);
+    // mfa_code
+    // }
+    //
+    // fn _oauth_login(&self, mfa_code: Option<String>) -> Option<OAuthToken> {
+    // let mut params = HashMap::new();
+    // params.insert("grant_type", "password");
+    // params.insert("username", self.username.as_ref().unwrap());
+    // params.insert("password", self.password.as_ref().unwrap());
+    // params.insert("scope", self.scope.as_ref().unwrap());
+    // params.insert("client_id", self.client_string.as_ref().unwrap());
+    //
+    // if mfa_code.is_some() {
+    // params.insert("mfa_code", mfa_code.as_ref().unwrap());
+    // }
+    //
+    // ("backup_code", backup_code.into())
+    // let client = HTTPClient::new();
+    //
+    // let mut res = client
+    // .post("https://api.robinhood.com/oauth2/token/")
+    // .header(UserAgent::new(self.agent.to_owned()))
+    // .form(&params.to_owned())
+    // .send()
+    // .unwrap()
+    // .json::<OAuthToken>()
+    // .unwrap();
+    //
+    // if mfa_code.is_none() && res.mfa_required.is_some() &&
+    // res.mfa_required.unwrap() { let mfa =
+    // &self._get_mfa_code(res.mfa_type.unwrap()); return self.
+    // _oauth_login(Some(mfa.to_string())); }
+    // else {
+    // res.birth = Some(time::get_time().sec);
+    // }
+    //
+    // Some(res)
+    // }
+    //
+    // fn _classic_login(&self, mfa_code: Option<String>) -> Option<PlainAuthToken>
+    // { let mut params = HashMap::new();
+    // params.insert("username", self.username.as_ref().unwrap());
+    // params.insert("password", self.password.as_ref().unwrap());
+    //
+    // if mfa_code.is_some() {
+    // params.insert("mfa_code", mfa_code.as_ref().unwrap());
+    // }
+    //
+    // ("backup_code", backup_code.into())
+    // let client = HTTPClient::new();
+    //
+    // let res = client
+    // .post("https://api.robinhood.com/api-token-auth/")
+    // .header(UserAgent::new(self.agent.to_owned()))
+    // .form(&params.to_owned())
+    // .send()
+    // .unwrap()
+    // .json::<PlainAuthToken>()
+    // .unwrap();
+    //
+    // if mfa_code.is_none() && res.mfa_required.is_some() &&
+    // res.mfa_required.unwrap() { let mfa =
+    // &self._get_mfa_code(res.mfa_type.unwrap()); return self.
+    // _classic_login(Some(mfa.to_string())); }
+    //
+    // Some(res)
+    // }
+    //
+    // pub fn build(&mut self) -> Result<Client> {
+    // let mut headers = Headers::new();
+    // headers.set(UserAgent::new(self.agent.to_owned()));
+    // let mut authorized = false;
+    //
+    // if self.username.is_some() && self.username.is_some() {
+    // if self.client_string.is_some() {
+    // OAuth2
+    //
+    // let mfa_callback = self.mfa_callback.as_ref();
+    // let token = self._oauth_login(None);
+    // if token.is_some() {
+    // headers.set(Authorization(Bearer {
+    // token: token.unwrap().access_token.to_owned().unwrap(),
+    // }));
+    // }
+    // }
+    // else {
+    // Old skool
+    // let token = self._classic_login(None);
+    // println!("{:?}", token);
+    // headers.set(Authorization(
+    // String::from("Token ") + token.unwrap().token.to_owned().unwrap().as_ref(),
+    // ));
+    // }
+    //
+    // authorized = true;
+    // }
+    //
+    // println!("{:?}", headers);
+    //
+    // let client = HTTPClient::builder().default_headers(headers).build()?;
+    //
+    // Ok(Client {
+    // client:     client,
+    // authorized: authorized,
+    // })
+    // }
+    //
+}
+
+// Conditionally compile the module `test` only when the test-suite is run.
+#[cfg(test)]
+mod test_order_builder {
+    use super::Order;
+
+    #[test]
+    fn order_builder() {
+        assert!(Order::new().build().is_ok());
+    }
+
+    #[test]
+    #[should_panic]
+    fn client_builder_bad_login() {
+        assert!(Order::new().login("username", "password").build().is_ok());
     }
 }
