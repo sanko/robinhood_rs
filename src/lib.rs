@@ -314,6 +314,22 @@ impl Client {
             .unwrap();
         res.status().is_success()
     }
+
+    pub fn positions(&self) -> Positions {
+        let account = self.accounts().nth(0).unwrap().unwrap();
+        Positions::new_with_client(self.client.to_owned())
+            .set_next(account.positions())
+            .to_owned()
+    }
+
+    pub fn positions_nonzero(&self) -> Positions {
+        let account = self.accounts().nth(0).unwrap().unwrap();
+        let mut url: String = account.positions();
+        url.push_str("?nonzero=true");
+        Positions::new_with_client(self.client.to_owned())
+            .set_next(url)
+            .to_owned()
+    }
 }
 
 pub struct ClientBuilder {
@@ -651,6 +667,22 @@ iter_builder!(
     override_day_trade_checks: bool = None,
     position: String = None,
     average_price: Option<String> = None,
+    quantity: String = None
+});
+
+iter_builder!(
+    Positions => Position as PositionData, "https://api.robinhood.com/accounts/{account_id}/positions/" {
+    shares_held_for_stock_grants: String = None,
+    account: String = None,
+    intraday_quantity: String = None,
+    intraday_average_buy_price: String = None,
+    url: String = None,
+    created_at: String = None,
+    updated_at: String = None,
+    shares_held_for_buys: String = None,
+    average_buy_price: String = None,
+    instrument: String = None,
+    shares_held_for_sells: String = None,
     quantity: String = None
 });
 

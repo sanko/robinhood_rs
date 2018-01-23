@@ -66,6 +66,11 @@ impl $list_name {
         }
     }
 
+    pub fn set_next(&mut self, url: String) -> Self {
+        self.next = Some(url.to_owned());
+        self.to_owned()
+    }
+
     fn try_next(&mut self) -> Result<Option<$item_name>> {
         // If the previous page has a Instrument that hasn't been looked at.
         if let Some(dep) = self.results.next() {
