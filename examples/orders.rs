@@ -29,8 +29,8 @@ market_order.send();
     let orders = rh.orders();
     //println!("{:#?}", orders);
     for order in orders.take(10) {
-        //println!("Order: {:#?}", order);
-        rh.cancel(order.unwrap());
+        println!("Order: {:#?}", order);
+        //rh.cancel(order.unwrap());
     }
     
 }

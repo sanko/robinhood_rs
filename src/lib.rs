@@ -42,7 +42,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 
 use reqwest::{Client as HTTPClient, Response};
-use reqwest::header::{Authorization, Bearer, Headers, UserAgent};
+use reqwest::header::{Authorization, Bearer, ContentType, Headers, UserAgent};
 
 use std::collections::HashMap;
 
@@ -139,6 +139,7 @@ impl Client {
             client_string: None,                 // OAuth2
             scope: Some("internal".to_string()), // OAuth2
             mfa_callback: cell,
+            migrate: false,
         }
     }
 
@@ -148,6 +149,11 @@ impl Client {
         println!("{:?}", res);
         res.read_to_string(&mut body).unwrap();
         body
+    }
+
+    pub fn _get_res(&self, url: &str) -> Response {
+        let mut req = self.client.get(url);
+        req.send().unwrap()
     }
 
     pub fn _post(&self, url: &str, params: Option<HashMap<&str, &str>>) -> String {
@@ -168,10 +174,20 @@ impl Client {
         req.send().unwrap()
     }
 
-    pub fn _get_res(&self, url: &str) -> Response {
-        let mut req = self.client.get(url);
-        req.send().unwrap()
+    pub fn _patch(&self, url: &str, patch: serde_json::Map<String, serde_json::Value>) -> String {
+        let mut body = String::new();
+        let mut res = self._patch_res(url, patch);
+        println!("{:?}", res);
+        res.read_to_string(&mut body).unwrap();
+        body
     }
+
+    pub fn _patch_res(&self, url: &str, patch: serde_json::Map<String, serde_json::Value>) -> Response {
+        self.client.patch(url)
+        .header(ContentType::json())
+        .body(serde_json::to_string(&patch).unwrap()).send().unwrap()
+    }
+
 
     /// Checks whether or not the client is authorized with an account.
     ///
@@ -322,14 +338,27 @@ impl Client {
             .to_owned()
     }
 
+    pub fn positions_with_account(&self, account: Account) -> Positions {
+        Positions::new_with_client(self.client.to_owned())
+            .set_next(account.positions())
+            .to_owned()
+    }
+
     pub fn positions_nonzero(&self) -> Positions {
-        let account = self.accounts().nth(0).unwrap().unwrap();
+        Positions::new_with_client(self.client.to_owned())
+            .set_next("https://api.robinhood.com/positions/?nonzero=true".to_string())
+            .to_owned()
+    }
+
+    pub fn positions_nonzero_with_account(&self, account: Account) -> Positions {
         let mut url: String = account.positions();
         url.push_str("?nonzero=true");
         Positions::new_with_client(self.client.to_owned())
             .set_next(url)
             .to_owned()
     }
+
+
 }
 
 pub struct ClientBuilder {
@@ -340,6 +369,7 @@ pub struct ClientBuilder {
     scope: Option<String>,         /* OAuth2: read, watchlist, investments, trade, balances,
                                     * funding:all:read */
     mfa_callback: Rc<RefCell<FnMut(String) -> String>>,
+    migrate: bool, // Migrate classic auth to OAuth2
 }
 
 impl ClientBuilder {
@@ -372,6 +402,11 @@ impl ClientBuilder {
         self
     }
 
+    pub fn migrate(&mut self) -> &mut ClientBuilder {
+        self.migrate = true;
+        self
+    }
+
     fn _get_mfa_code(&self, mfa_type: String) -> String {
         let mut closure = self.mfa_callback.as_ref().borrow_mut();
         // Unfortunately, Rust's auto-dereference of pointers is not clever enough
@@ -393,6 +428,7 @@ impl ClientBuilder {
         }
         // ("backup_code", backup_code.into())
         let client = HTTPClient::new();
+
         let mut res = client
             .post("https://api.robinhood.com/oauth2/token/")
             .header(UserAgent::new(self.agent.to_owned()))
@@ -401,6 +437,7 @@ impl ClientBuilder {
             .unwrap()
             .json::<OAuthToken>()
             .unwrap();
+
         if mfa_code.is_none() && res.mfa_required.is_some() && res.mfa_required.unwrap() {
             let mfa = &self._get_mfa_code(res.mfa_type.unwrap());
             return self._oauth_login(Some(mfa.to_string()));
@@ -440,6 +477,25 @@ impl ClientBuilder {
         Some(res)
     }
 
+    fn _migrate_auth_token(&self, token: PlainAuthToken) -> Option<OAuthToken> {
+        let client = HTTPClient::new();
+
+        let mut res = client
+            .post("https://api.robinhood.com/oauth2/migrate_token/")
+            .header(UserAgent::new(self.agent.to_owned()))
+            .header((Authorization(
+                        String::from("Token ") + token.token.unwrap().to_owned().as_ref(),
+                    )))
+            .send()
+            .unwrap()
+            .json::<OAuthToken>()
+            .unwrap();
+
+        res.birth = Some(time::get_time().sec);
+
+        Some(res)
+    }
+
     pub fn build(&mut self) -> Result<Client> {
         let mut headers = Headers::new();
         headers.set(UserAgent::new(self.agent.to_owned()));
@@ -454,18 +510,29 @@ impl ClientBuilder {
                     headers.set(Authorization(Bearer {
                         token: token.unwrap().access_token.to_owned().unwrap(),
                     }));
+                    authorized = true;
                 }
             }
             else {
                 // Old skool
                 let token = self._classic_login(None);
                 // println!("Classic: {:?}", token);
-                headers.set(Authorization(
-                    String::from("Token ") + token.unwrap().token.to_owned().unwrap().as_ref(),
-                ));
-            }
+                if token.is_some() {
+                    if self.migrate {
+                        let token_migrate : OAuthToken = self._migrate_auth_token(token.unwrap()).unwrap() ;
 
-            authorized = true;
+                        headers.set(Authorization(Bearer {
+                            token: token_migrate.access_token.to_owned().unwrap(),
+                        }));
+                    }
+                    else {
+                        headers.set(Authorization(
+                            String::from("Token ") + token.unwrap().token.to_owned().unwrap().as_ref(),
+                        ));
+                    }
+                    authorized = true;
+                }
+            }
         }
 
         // println!("{:?}", headers);
@@ -642,19 +709,19 @@ iter_builder!(
     Orders => Order as OrderData, "https://api.robinhood.com/orders/" {
     updated_at: String = None,
     ref_id: Option<String> = None,
-	time_in_force: String = None,
-	fees: String = None,
+    time_in_force: String = None,
+    fees: String = None,
     #[serde(rename = "cancel")]
-	can_cancel: Option<String> = None,
-	id: String = None,
-	cumulative_quantity: String = None,
-	stop_price: Option<String> = None,
-	reject_reason: serde_json::Value = None,
-	instrument: String = None,
-	state: String = None,
-	trigger: String = None,
-	override_dtbp_checks: bool = None,
-	#[serde(rename = "type")]
+    can_cancel: Option<String> = None,
+    id: String = None,
+    cumulative_quantity: String = None,
+    stop_price: Option<String> = None,
+    reject_reason: serde_json::Value = None,
+    instrument: String = None,
+    state: String = None,
+    trigger: String = None,
+    override_dtbp_checks: bool = None,
+    #[serde(rename = "type")]
     type_field: String = None,
     last_transaction_at: String = None,
     price: Option<String> = None,
@@ -951,12 +1018,13 @@ mod test_order_builder {
 
     #[test]
     fn order_builder() {
-       // assert!(Order::new().build().is_ok());
+        // assert!(Order::new().build().is_ok());
     }
 
     #[test]
     #[should_panic]
     fn client_builder_bad_login() {
+        assert(1);
         //assert!(Order::new().login("username", "password").build().is_ok());
     }
 }
