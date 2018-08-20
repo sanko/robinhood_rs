@@ -4,6 +4,10 @@
 dist: trusty
 language: rust
 services: docker
+rust:
+    - stable
+    - beta
+    - nightly
 
 env:
   global:
@@ -11,6 +15,9 @@ env:
     - RUST_TEST_THREADS=1
 
 matrix:
+  allow_failures:
+    - rust: nightly
+  fast_finish: true
   # These are all the build jobs. Adjust as necessary. Comment out what you
   # don't need. The iOS/Mac builds are distributed throughout because Travis
   # likes to have a big backlog on builds on those machines. This way at least
@@ -22,135 +29,63 @@ matrix:
     # Additionally they're moved to the front of the line to get them in the Travis
     # OS X build queue first.
     - env: TARGET="aarch64-apple-ios;armv7-apple-ios;armv7s-apple-ios;i386-apple-ios;x86_64-apple-ios" DISABLE_TESTS=1
-      rust:
-        - stable
-        - beta
-        - nightly
+
       os: osx
 
     # Mac builds
     # These are also moved to be first because they wait in a long queue with Travis
     - env: TARGET=i686-apple-darwin
-      rust:
-        - stable
-        - beta
-        - nightly
+
       os: osx
     - env: TARGET=x86_64-apple-darwin
-      rust:
-        - stable
-        - beta
-        - nightly
+
       os: osx
 
     # Android
     - env: TARGET=aarch64-linux-android DISABLE_TESTS=1
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=arm-linux-androideabi DISABLE_TESTS=1
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=armv7-linux-androideabi DISABLE_TESTS=1
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=i686-linux-android DISABLE_TESTS=1
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=x86_64-linux-android DISABLE_TESTS=1
-      rust:
-        - stable
-        - beta
-        - nightly
+
 
     # Linux
     - env: TARGET=aarch64-unknown-linux-gnu
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=arm-unknown-linux-gnueabi
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=arm-unknown-linux-musleabi DISABLE_TESTS=1
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=armv7-unknown-linux-gnueabihf
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=i686-unknown-linux-gnu
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=i686-unknown-linux-musl
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=mips-unknown-linux-gnu
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=mips64-unknown-linux-gnuabi64
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=mips64el-unknown-linux-gnuabi64
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=mipsel-unknown-linux-gnu
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=powerpc-unknown-linux-gnu DISABLE_TESTS=1
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=powerpc64-unknown-linux-gnu
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=powerpc64le-unknown-linux-gnu
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=s390x-unknown-linux-gnu DISABLE_TESTS=1
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=x86_64-unknown-linux-gnu
-      rust:
-        - stable
-        - beta
-        - nightly
+
     - env: TARGET=x86_64-unknown-linux-musl
-      rust:
-        - stable
-        - beta
-        - nightly
+
 
     # *BSD
     # FreeBSD i686 and x86_64 use BuildBot instead of Travis
@@ -159,10 +94,7 @@ matrix:
     # - env: TARGET=i686-unknown-freebsd DISABLE_TESTS=1
     # - env: TARGET=x86_64-unknown-freebsd DISABLE_TESTS=1
     - env: TARGET=x86_64-unknown-netbsd DISABLE_TESTS=1
-      rust:
-        - stable
-        - beta
-        - nightly
+
 
     # Make sure stable is always working too
     - env: TARGET=x86_64-unknown-linux-gnu
