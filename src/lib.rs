@@ -811,8 +811,6 @@ impl OrderBuilder {
             // params.insert("extended_hours", "true".to_string());
         }
 
-        println!("{:#?}", params);
-
         let mut req = self.client.post("https://api.robinhood.com/orders/");
         req.form(&params.to_owned());
         let res = req.send().unwrap().json::<OrderData>().unwrap();
