@@ -36,17 +36,20 @@ extern crate reqwest;
 extern crate serde_derive;
 extern crate serde_json;
 
-extern crate time;
+extern crate chrono;
 
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::rc::Rc;
 
-use reqwest::{Client as HTTPClient, Response};
 use reqwest::header::{Authorization, Bearer, ContentType, Headers, UserAgent};
+use reqwest::{Client as HTTPClient, Response};
 
 use std::collections::HashMap;
 
 use std::io::Read;
+
+use chrono::naive::NaiveDate;
+use chrono::prelude::*;
 
 #[macro_use]
 pub mod macros;
@@ -57,14 +60,14 @@ error_chain! {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PaginatedApiResponse<T> {
     previous: Option<String>,
     next: Option<String>,
     pub results: Vec<T>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OAuthToken {
     backup_code: Option<String>,
     access_token: Option<String>,
@@ -73,21 +76,21 @@ pub struct OAuthToken {
     scope: Option<String>,
     refresh_token: Option<String>,
     // Locally defined
-    birth: Option<i64>,
+    birth: Option<DateTime<Utc>>,
     // MultiFactor
     mfa_code: Option<String>,
     // MultiFactor waiting for code...
-    mfa_type:     Option<String>,
+    mfa_type: Option<String>,
     mfa_required: Option<bool>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlainAuthToken {
     token: Option<String>,
     // MultiFactor
     mfa_code: Option<String>,
     // MultiFactor waiting for code...
-    mfa_type:     Option<String>,
+    mfa_type: Option<String>,
     mfa_required: Option<bool>,
 }
 
@@ -139,14 +142,13 @@ impl Client {
             client_string: None,                 // OAuth2
             scope: Some("internal".to_string()), // OAuth2
             mfa_callback: cell,
-            migrate: false,
         }
     }
 
     pub fn _get(&self, url: &str) -> String {
         let mut body = String::new();
         let mut res = self._get_res(url);
-        println!("{:?}", res);
+        //println!("{:?}", res);
         res.read_to_string(&mut body).unwrap();
         body
     }
@@ -182,12 +184,18 @@ impl Client {
         body
     }
 
-    pub fn _patch_res(&self, url: &str, patch: serde_json::Map<String, serde_json::Value>) -> Response {
-        self.client.patch(url)
-        .header(ContentType::json())
-        .body(serde_json::to_string(&patch).unwrap()).send().unwrap()
+    pub fn _patch_res(
+        &self,
+        url: &str,
+        patch: serde_json::Map<String, serde_json::Value>,
+    ) -> Response {
+        self.client
+            .patch(url)
+            .header(ContentType::json())
+            .body(serde_json::to_string(&patch).unwrap())
+            .send()
+            .unwrap()
     }
-
 
     /// Checks whether or not the client is authorized with an account.
     ///
@@ -229,15 +237,15 @@ impl Client {
     pub fn logout(&self) -> bool {
         if self.authorized() {
             let mut body = String::new();
-            let mut res = self.client
+            let mut res = self
+                .client
                 .post("https://api.robinhood.com/api-token-logout/")
                 .send()
                 .unwrap();
 
             res.read_to_string(&mut body).unwrap();
             body.is_empty()
-        }
-        else {
+        } else {
             false
         }
     }
@@ -289,8 +297,7 @@ impl Client {
         quantity: u64,
         instrument: Instrument,
         account: Account,
-    ) -> OrderBuilder
-    {
+    ) -> OrderBuilder {
         OrderBuilder::new(
             self.client.to_owned(),
             "sell",
@@ -312,8 +319,7 @@ impl Client {
         quantity: u64,
         instrument: Instrument,
         account: Account,
-    ) -> OrderBuilder
-    {
+    ) -> OrderBuilder {
         let order_builder: OrderBuilder =
             OrderBuilder::new(self.client.to_owned(), "buy", quantity, instrument, account);
         order_builder
@@ -325,7 +331,8 @@ impl Client {
         if order.can_cancel().is_none() {
             return false;
         }
-        let res = self.client
+        let res = self
+            .client
             .post(order.can_cancel().unwrap().as_str())
             .send()
             .unwrap();
@@ -358,8 +365,6 @@ impl Client {
             .set_next(url)
             .to_owned()
     }
-
-
 }
 
 pub struct ClientBuilder {
@@ -370,7 +375,6 @@ pub struct ClientBuilder {
     scope: Option<String>,         /* OAuth2: read, watchlist, investments, trade, balances,
                                     * funding:all:read */
     mfa_callback: Rc<RefCell<FnMut(String) -> String>>,
-    migrate: bool, // Migrate classic auth to OAuth2
 }
 
 impl ClientBuilder {
@@ -400,11 +404,6 @@ impl ClientBuilder {
     pub fn login(&mut self, username: &str, password: &str) -> &mut ClientBuilder {
         self.username = Some(username.to_owned());
         self.password = Some(password.to_owned());
-        self
-    }
-
-    pub fn migrate(&mut self) -> &mut ClientBuilder {
-        self.migrate = true;
         self
     }
 
@@ -442,9 +441,8 @@ impl ClientBuilder {
         if mfa_code.is_none() && res.mfa_required.is_some() && res.mfa_required.unwrap() {
             let mfa = &self._get_mfa_code(res.mfa_type.unwrap());
             return self._oauth_login(Some(mfa.to_string()));
-        }
-        else {
-            res.birth = Some(time::get_time().sec);
+        } else {
+            res.birth = Some(Utc::now())
         }
         Some(res)
     }
@@ -478,25 +476,6 @@ impl ClientBuilder {
         Some(res)
     }
 
-    fn _migrate_auth_token(&self, token: PlainAuthToken) -> Option<OAuthToken> {
-        let client = HTTPClient::new();
-
-        let mut res = client
-            .post("https://api.robinhood.com/oauth2/migrate_token/")
-            .header(UserAgent::new(self.agent.to_owned()))
-            .header(Authorization(
-                        String::from("Token ") + token.token.unwrap().to_owned().as_ref(),
-                    ))
-            .send()
-            .unwrap()
-            .json::<OAuthToken>()
-            .unwrap();
-
-        res.birth = Some(time::get_time().sec);
-
-        Some(res)
-    }
-
     pub fn build(&mut self) -> Result<Client> {
         let mut headers = Headers::new();
         headers.set(UserAgent::new(self.agent.to_owned()));
@@ -513,24 +492,14 @@ impl ClientBuilder {
                     }));
                     authorized = true;
                 }
-            }
-            else {
+            } else {
                 // Old skool
                 let token = self._classic_login(None);
                 // println!("Classic: {:?}", token);
                 if token.is_some() {
-                    if self.migrate {
-                        let token_migrate : OAuthToken = self._migrate_auth_token(token.unwrap()).unwrap() ;
-
-                        headers.set(Authorization(Bearer {
-                            token: token_migrate.access_token.to_owned().unwrap(),
-                        }));
-                    }
-                    else {
-                        headers.set(Authorization(
-                            String::from("Token ") + token.unwrap().token.to_owned().unwrap().as_ref(),
-                        ));
-                    }
+                    headers.set(Authorization(
+                        String::from("Token ") + token.unwrap().token.to_owned().unwrap().as_ref(),
+                    ));
                     authorized = true;
                 }
             }
@@ -541,7 +510,7 @@ impl ClientBuilder {
         let client = HTTPClient::builder().default_headers(headers).build()?;
 
         Ok(Client {
-            client:     client,
+            client: client,
             authorized: authorized,
         })
     }
@@ -575,7 +544,7 @@ iter_builder!(
     quote: String = None,
     tradability: String = None,
     bloomberg_unique: String = None,
-    list_date: Option<String> = None,
+    list_date: Option<NaiveDate> = None,
     name: String = None,
     symbol: String = None,
     fundamentals: String = None,
@@ -593,11 +562,13 @@ iter_builder!(
 
 impl Instruments {
     pub fn search_by_symbol<S>(symbol: S) -> Result<Instrument>
-    where S: Into<String> {
+    where
+        S: Into<String>,
+    {
         let mut inst = Instruments {
             results: vec![].into_iter(),
-            client:  HTTPClient::new(),
-            next:    Some(
+            client: HTTPClient::new(),
+            next: Some(
                 format!(
                     "https://api.robinhood.com/instruments/?symbol={}",
                     symbol.into()
@@ -632,21 +603,21 @@ mod test_instruments {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MarginBalances {
     day_trade_buying_power: String,
     start_of_day_overnight_buying_power: String,
     overnight_buying_power_held_for_orders: String,
     cash_held_for_orders: String,
-    created_at: String,
+    created_at: DateTime<Utc>,
     unsettled_debit: String,
     start_of_day_dtbp: String,
     day_trade_buying_power_held_for_orders: String,
     overnight_buying_power: String,
-    marked_pattern_day_trader_date: serde_json::Value,
+    marked_pattern_day_trader_date: Option<NaiveDate>,
     cash: String,
     unallocated_margin_cash: String,
-    updated_at: String,
+    updated_at: DateTime<Utc>,
     cash_available_for_withdrawal: String,
     margin_limit: String,
     outstanding_interest: String,
@@ -657,19 +628,19 @@ pub struct MarginBalances {
     overnight_ratio: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstantEligibility {
-    updated_at: serde_json::Value,
+    updated_at: Option<DateTime<Utc>>,
     reason: String,
-    reinstatement_date: serde_json::Value,
-    reversal: serde_json::Value,
+    reinstatement_date: Option<DateTime<Utc>>,
+    reversal: Option<serde_json::Value>,
     state: String,
 }
 
 iter_builder!(
     Accounts => Account as AccountData, "https://api.robinhood.com/accounts/" {
     deactivated: bool = None,
-    updated_at: String = None,
+    updated_at: DateTime<Utc> = None,
     margin_balances: MarginBalances = None,
     portfolio: String = None,
     cash_balances: serde_json::Value = None,
@@ -689,17 +660,19 @@ iter_builder!(
     only_position_closing_trades: bool = None,
     url: String = None,
     positions: String = None,
-    created_at: String = None,
+    created_at: DateTime<Utc> = None,
     cash: String = None,
     sma_held_for_orders: String = None,
     unsettled_debit: String = None,
     account_number: String = None,
     uncleared_deposits: String = None,
     unsettled_funds: String = None,
-    nummus_enabled: Option<bool> = None
+    nummus_enabled: Option<bool> = None, // Crypto
+    option_level: String = None,
+    is_pinnacle_account: bool = None
 });
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Execution {
     timestamp: String,
     price: String,
@@ -710,34 +683,35 @@ pub struct Execution {
 
 iter_builder!(
     Orders => Order as OrderData, "https://api.robinhood.com/orders/" {
-    updated_at: String = None,
-    ref_id: Option<String> = None,
-    time_in_force: String = None,
-    fees: String = None,
+    account: String = None,
+    average_price: Option<String> = None,
     #[serde(rename = "cancel")]
     can_cancel: Option<String> = None,
-    id: String = None,
+    created_at: DateTime<Utc> = None,
     cumulative_quantity: String = None,
-    stop_price: Option<String> = None,
-    reject_reason: serde_json::Value = None,
-    instrument: String = None,
-    state: String = None,
-    trigger: String = None,
-    override_dtbp_checks: bool = None,
-    #[serde(rename = "type")]
-    type_field: String = None,
-    last_transaction_at: String = None,
-    price: Option<String> = None,
     executions: Vec<Execution> = Vec::new(),
     extended_hours: bool = None,
-    account: String = None,
-    url: String = None,
-    created_at: String = None,
-    side: String = None,
+    fees: String = None,
+    id: String = None,
+    instrument: String = None,
+    last_transaction_at: DateTime<Utc> = None,
     override_day_trade_checks: bool = None,
+    override_dtbp_checks: bool = None,
     position: String = None,
-    average_price: Option<String> = None,
-    quantity: String = None
+    price: Option<String> = None,
+    quantity: String = None,
+    ref_id: Option<String> = None,
+    reject_reason: Option<String> = None,
+    response_category: Option<String> = None,
+    side: String = None,
+    state: String = None,
+    stop_price: Option<String> = None,
+    time_in_force: String = None,
+    trigger: String = None,
+    #[serde(rename = "type")]
+    type_field: String = None,
+    updated_at: DateTime<Utc> = None,
+    url: String = None
 });
 
 iter_builder!(
@@ -747,8 +721,8 @@ iter_builder!(
     intraday_quantity: String = None,
     intraday_average_buy_price: String = None,
     url: String = None,
-    created_at: String = None,
-    updated_at: String = None,
+    created_at: DateTime<Utc> = None,
+    updated_at: DateTime<Utc> = None,
     shares_held_for_buys: String = None,
     average_buy_price: String = None,
     instrument: String = None,
@@ -787,22 +761,20 @@ impl OrderBuilder {
         quantity: u64,
         instrument: Instrument,
         account: Account,
-    ) -> OrderBuilder
-    {
+    ) -> OrderBuilder {
         OrderBuilder {
             client: client.to_owned(),
 
             _type: "market".to_owned(),
             side: side.to_owned(),
-            time_in_force: "opg".to_owned(),
+            time_in_force: "gfd".to_owned(), //  `gfd`, `gtc`, or `opg`
 
-            //  `gfd`, `gtc`, or `opg`
             price: None,
             stop_price: None,
             quantity: quantity,
 
             instrument: instrument,
-            account:    account,
+            account: account,
 
             extended_hours: false,
             override_dtbp_checks: false,

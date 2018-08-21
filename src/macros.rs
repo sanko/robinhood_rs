@@ -25,7 +25,7 @@ macro_rules! iter_builder {
 */
 // Could capture more fields here if needed
 #[serde(deny_unknown_fields)] // Debugging!
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct $data_name {
     $(  $(#[$meta])* // Can rename fields because rust is retarded
         $attr_name : $attr_type ),*
