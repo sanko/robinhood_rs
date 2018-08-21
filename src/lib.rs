@@ -29,14 +29,14 @@
 //! ```
 //!
 
-#[macro_use]
-extern crate error_chain;
 extern crate reqwest;
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;
 
 extern crate chrono;
+
+extern crate failure;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -51,14 +51,10 @@ use std::io::Read;
 use chrono::naive::NaiveDate;
 use chrono::prelude::*;
 
+use failure::{Error, err_msg};
+
 #[macro_use]
 pub mod macros;
-
-error_chain! {
-    foreign_links {
-        Reqwest(reqwest::Error);
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PaginatedApiResponse<T> {
@@ -270,7 +266,7 @@ impl Client {
         Instruments::new_with_client(self.client.to_owned())
     }
 
-    pub fn instrument_by_symbol(&self, symbol: &str) -> Result<Instrument> {
+    pub fn instrument_by_symbol(&self, symbol: &str) -> Result<Instrument, Error> {
         Instruments::search_by_symbol(symbol)
     }
 
@@ -476,7 +472,7 @@ impl ClientBuilder {
         Some(res)
     }
 
-    pub fn build(&mut self) -> Result<Client> {
+    pub fn build(&mut self) -> Result<Client, Error> {
         let mut headers = Headers::new();
         headers.set(UserAgent::new(self.agent.to_owned()));
         let mut authorized = false;
@@ -561,7 +557,7 @@ iter_builder!(
 });
 
 impl Instruments {
-    pub fn search_by_symbol<S>(symbol: S) -> Result<Instrument>
+    pub fn search_by_symbol<S>(symbol: S) -> Result<Instrument, Error>
     where
         S: Into<String>,
     {

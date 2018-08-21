@@ -1,6 +1,8 @@
 ## v0.2.0
 
-Getting started with this now.
+Move to chrono for timestamp handling.
+
+
 
 ## v0.1.0
 

@@ -72,7 +72,7 @@ impl $list_name {
         self.to_owned()
     }
 
-    fn try_next(&mut self) -> Result<Option<$item_name>> {
+    fn try_next(&mut self) -> Result<Option<$item_name>, Error> {
         // If the previous page has a Instrument that hasn't been looked at.
         if let Some(dep) = self.results.next() {
             return Ok(Some($item_name::new(dep)));
@@ -95,7 +95,7 @@ impl $list_name {
 }
 
 impl Iterator for $list_name {
-    type Item = Result<$item_name>;
+    type Item = Result<$item_name, Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // Some juggling required here because `try_next` returns a result
